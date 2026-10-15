@@ -15,9 +15,10 @@ import { FrameFeature } from '../types';
 const SAMPLE_RATE = 10; // 输出帧率（每秒帧数，即 100ms 窗口）
 
 export const analyzeMatchAudio = async (file: File): Promise<FrameFeature[]> => {
+  let audioContext: AudioContext | undefined;
   try {
     const arrayBuffer = await file.arrayBuffer();
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
     const rawData = audioBuffer.getChannelData(0); // 使用第一声道
@@ -53,7 +54,7 @@ export const analyzeMatchAudio = async (file: File): Promise<FrameFeature[]> => 
 
       // motion_score：基于音频活跃度的启发式估算（非真实视觉运动）
       const motionScore = isHit
-        ? 0.8 + Math.random() * 0.2
+        ? 0.8
         : rms > avgEnergy ? 0.3 : 0.1;
 
       frames.push({
@@ -69,9 +70,8 @@ export const analyzeMatchAudio = async (file: File): Promise<FrameFeature[]> => 
     return frames;
 
   } catch (error) {
-    console.error('[AudioAnalysis] 音频解析失败，回退到 mock 数据:', error);
-    // 解码失败时回退到 mock 数据（导入自独立的 mockDataService）
-    const { generateMockSignalData } = await import('./mockDataService');
-    return generateMockSignalData(60);
+    throw new Error('音轨解码失败，未生成模拟数据。请检查格式或使用本地视觉分析。');
+  } finally {
+    await audioContext?.close();
   }
 };

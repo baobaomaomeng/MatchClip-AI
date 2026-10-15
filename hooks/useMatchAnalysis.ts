@@ -1,196 +1,108 @@
-import { useState, useMemo } from 'react';
-import { analyzeMatchAudio } from '../services/audioAnalysisService';
-import { RallyFSM } from '../services/fsmService';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { scoreEngine } from '../services/scoreService';
-import { FrameFeature, RallyClip, MatchStats, RallyClipWithState } from '../types';
-import { reindexRallies } from './useRallyEditor';
-
-/**
- * P2-01：分析流程状态管理 Hook
- *
- * 封装：
- * - 文件上传与视频 URL 管理
- * - 音频分析 + FSM 回合识别流程
- * - JSON 导入/导出
- * - 比分计算（processedRallies / stats）
- * - 导入状态提示
- */
-
-type SortOption = 'id' | 'duration' | 'hits';
-type FilterOption = 'all' | 'long_rally' | 'game_point';
+import { api, createAnalysis, getResult, waitForJob } from '../services/analysisService';
+import { parseProject } from '../services/projectService';
+import { AnalysisMetadata, FrameFeature, RallyClip, MatchStats } from '../types';
 
 export function useMatchAnalysis() {
-    // --- 文件 & 视频 ---
-    const [file, setFile] = useState<File | null>(null);
-    const [videoUrl, setVideoUrl] = useState<string | null>(null);
-
-    // --- 分析流程 ---
-    const [analyzing, setAnalyzing] = useState(false);
-    const [progress, setProgress] = useState(0);
-    const [importStatus, setImportStatus] = useState<string | null>(null);
-
-    // --- 核心数据 ---
-    const [frames, setFrames] = useState<FrameFeature[]>([]);
-    const [rallies, setRallies] = useState<RallyClip[]>([]);
-    const [dataVersion, setDataVersion] = useState(0);
-
-    // --- 文件上传 ---
-    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const f = e.target.files[0];
-            setFile(f);
-            setVideoUrl(URL.createObjectURL(f));
-            setFrames([]);
-            setRallies([]);
-            setDataVersion(v => v + 1);
-        }
+  const [file, setFile] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoDuration,setVideoDuration]=useState<number|undefined>();
+  const [analyzing, setAnalyzing] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [progressText, setProgressText] = useState('');
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [frames, setFrames] = useState<FrameFeature[]>([]);
+  const [rallies, setRallies] = useState<RallyClip[]>([]);
+  const [metadata, setMetadata] = useState<AnalysisMetadata | null>(null);
+  const [dataVersion, setDataVersion] = useState(0);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [rangeStart, setRangeStart] = useState('0');
+  const [rangeEnd, setRangeEnd] = useState('');
+  const controller = useRef<AbortController | null>(null);
+  const activeJob = useRef<string | null>(null);
+  const generation = useRef(0);
+  useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
+  useEffect(() => () => {
+    controller.current?.abort();
+    if (activeJob.current) void fetch(`/api/jobs/${activeJob.current}`, { method: 'DELETE' });
+  }, []);
+  const cancelAnalysis = () => {
+    generation.current++;
+    controller.current?.abort();
+    if (activeJob.current) void api(`/api/jobs/${activeJob.current}`, { method: 'DELETE' }).catch(() => {});
+    activeJob.current = null;
+    setAnalyzing(false); setProgressText('已取消');
+  };
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const next = e.target.files?.[0];
+    if (!next) return;
+    cancelAnalysis();
+    setFile(next); setVideoUrl(URL.createObjectURL(next));setVideoDuration(undefined);setImportStatus(null);
+    setFrames([]); setRallies([]); setMetadata(null); setJobId(null); setError(null);
+    setRangeStart('0'); setRangeEnd(''); setDataVersion(v => v + 1);
+  };
+  const startAnalysis = async () => {
+    if (!file || analyzing) return;
+    const start = Number(rangeStart), end = rangeEnd.trim() ? Number(rangeEnd) : undefined;
+    if (!Number.isFinite(start) || start < 0 || end !== undefined && (!Number.isFinite(end) || end <= start)) {
+      setError('请填写有效的分析起止秒数'); return;
+    }
+    const current = ++generation.current;
+    const abort = new AbortController(); controller.current = abort;
+    setAnalyzing(true); setError(null); setProgress(0); setProgressText('正在传入本地分析服务');
+    try {
+      const { id } = await createAnalysis(file, start, end, abort.signal);
+      if (current !== generation.current) { void api(`/api/jobs/${id}`, { method: 'DELETE' }); return; }
+      activeJob.current = id;
+      await waitForJob(id, s => { setProgress(s.progress); setProgressText(s.message); }, abort.signal);
+      const result = await getResult(id, abort.signal);
+      const valid = parseProject(result,videoDuration);
+      if (current !== generation.current) return;
+      setMetadata(valid.metadata); setRallies(valid.rallies); setFrames(result.frames ?? []);
+      setJobId(id); setDataVersion(v => v + 1);
+    } catch (e) {
+      if (current === generation.current && (e as Error).name !== 'AbortError') setError((e as Error).message);
+    } finally {
+      if (current === generation.current) { setAnalyzing(false); activeJob.current = null; }
+    }
+  };
+  const { stats, processedRallies } = useMemo(() => {
+    const processedRallies = scoreEngine.processRallies(rallies);
+    const validDuration = rallies.reduce((n, r) => n + r.end - r.start, 0);
+    const totalHits = rallies.reduce((n, r) => n + r.hits, 0);
+    const final = processedRallies.at(-1)?.scoreStateAfter;
+    const stats: MatchStats = {
+      totalDuration: metadata ? (metadata.analysisEnd ?? metadata.sourceDuration ?? 0) - (metadata.analysisStart ?? 0) : 0,
+      validDuration, rallyCount: rallies.length, averageRallyLen: rallies.length ? validDuration/rallies.length : 0,
+      scoreA: final?.scoreA ?? null, scoreB: final?.scoreB ?? null,
+      totalHits, avgHitsPerRally: rallies.length ? totalHits/rallies.length : 0,
+      maxHits: Math.max(0, ...rallies.map(r => r.hits)), pendingCount: rallies.filter(r => r.reviewStatus !== 'accepted').length,
     };
-
-    // --- 音频分析 + FSM ---
-    const startAnalysis = async () => {
-        if (!file || !videoUrl) return;
-        setAnalyzing(true);
-        setProgress(10);
-
-        try {
-            setProgress(30);
-            const analyzedFrames = await analyzeMatchAudio(file);
-            setFrames(analyzedFrames);
-            setProgress(70);
-
-            const fsm = new RallyFSM();
-            const detectedRallies = fsm.processSignals(analyzedFrames);
-            setRallies(detectedRallies);
-            setDataVersion(v => v + 1);
-            setProgress(100);
-        } catch (e) {
-            console.error('Analysis failed', e);
-        } finally {
-            setAnalyzing(false);
-        }
-    };
-
-    // --- P2-04：派生状态（比分 + 统计）统一在此计算，作为唯一来源 ---
-    const { stats, processedRallies } = useMemo(() => {
-        const ralliesWithState: RallyClipWithState[] = scoreEngine.processRallies(rallies);
-
-        const validDuration = rallies.reduce((acc, r) => acc + (r.end - r.start), 0);
-        const totalHits = rallies.reduce((acc, r) => acc + r.hits, 0);
-        const maxHits = rallies.reduce((acc, r) => Math.max(acc, r.hits), 0);
-
-        const finalState = ralliesWithState.length > 0
-            ? ralliesWithState[ralliesWithState.length - 1].scoreStateAfter
-            : { scoreA: 0, scoreB: 0 };
-
-        const derivedTotalDuration = frames.length > 0
-            ? frames[frames.length - 1].t
-            : (rallies.length > 0 ? rallies[rallies.length - 1].end : 0);
-
-        const statsObj: MatchStats = {
-            totalDuration: derivedTotalDuration,
-            validDuration,
-            rallyCount: rallies.length,
-            averageRallyLen: rallies.length ? validDuration / rallies.length : 0,
-            scoreA: finalState.scoreA,
-            scoreB: finalState.scoreB,
-            totalHits,
-            avgHitsPerRally: rallies.length ? totalHits / rallies.length : 0,
-            maxHits,
-        };
-
-        return { stats: statsObj, processedRallies: ralliesWithState };
-    }, [rallies, frames]);
-
-    // --- JSON 导出 ---
-    const handleExportJSON = () => {
-        if (rallies.length === 0) return;
-
-        const dataToSave = {
-            metadata: {
-                version: '1.0',
-                exportedAt: new Date().toISOString(),
-                sourceFile: file?.name || 'unknown',
-            },
-            rallies,
-        };
-
-        const blob = new Blob([JSON.stringify(dataToSave, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${(file?.name || 'match').replace(/\.[^/.]+$/, '')}_rallies.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    };
-
-    // --- JSON 导入 ---
-    const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const fileReader = new FileReader();
-            fileReader.onload = (ev) => {
-                try {
-                    const content = ev.target?.result as string;
-                    const jsonData = JSON.parse(content);
-
-                    if (!jsonData.rallies || !Array.isArray(jsonData.rallies)) {
-                        setImportStatus('导入失败：文件格式无效');
-                        return;
-                    }
-
-                    const sanitizedRallies: RallyClip[] = jsonData.rallies.map((r: any) => ({
-                        id: Number(r.id),
-                        start: Number(r.start),
-                        end: Number(r.end),
-                        hits: Number(r.hits),
-                        serverSide: r.serverSide === 'B' ? 'B' : 'A',
-                        winner: (r.winner === 'A' || r.winner === 'B') ? r.winner : undefined,
-                    })).sort((a: RallyClip, b: RallyClip) => a.start - b.start);
-
-                    setFrames([]);
-                    setRallies(reindexRallies(sanitizedRallies));
-                    setDataVersion(v => v + 1);
-                    setImportStatus(`成功导入 ${sanitizedRallies.length} 个回合`);
-                    setTimeout(() => setImportStatus(null), 3000);
-                } catch (err) {
-                    console.error(err);
-                    setImportStatus('导入失败：JSON 解析错误');
-                }
-            };
-            fileReader.readAsText(e.target.files[0]);
-        }
-        e.target.value = '';
-    };
-
-    // --- 状态提示工具 ---
-    const showStatus = (msg: string, duration = 3000) => {
-        setImportStatus(msg);
-        setTimeout(() => setImportStatus(null), duration);
-    };
-
-    return {
-        // 文件 & 视频
-        file,
-        videoUrl,
-        handleFileUpload,
-        // 分析流程
-        analyzing,
-        progress,
-        startAnalysis,
-        // 核心数据
-        frames,
-        rallies,
-        setRallies,
-        dataVersion,
-        // 派生状态（P2-04 唯一来源）
-        stats,
-        processedRallies,
-        // 导入导出
-        handleExportJSON,
-        handleImportJSON,
-        // 状态提示
-        importStatus,
-        showStatus,
-    };
+    return { stats, processedRallies };
+  }, [rallies, metadata]);
+  const handleExportJSON = () => {
+    const data = { metadata: { ...metadata, version: '2.0', sourceFile: file?.name, exportedAt: new Date().toISOString() }, rallies };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    const a = document.createElement('a'); a.href = url; a.download = `${file?.name ?? 'match'}_rallies.json`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const handleImportJSON = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0]; e.target.value = '';
+    if (!selected || analyzing) return;
+    try {
+      const project = parseProject(JSON.parse(await selected.text()),videoDuration);
+      if (file && project.metadata.sourceFile !== file.name) throw new Error('项目对应的视频文件名不匹配，请先选择原视频');
+      setRallies(project.rallies); setFrames([]); setMetadata(project.metadata); setDataVersion(v => v + 1);
+      setImportStatus(`已导入 ${project.rallies.length} 个候选片段`); setError(null);
+      // A previous server job must never export against a different imported source.
+      setJobId(null);
+    } catch (e) { setError((e as Error).message); }
+  };
+  const showStatus = (message: string) => setImportStatus(message);
+  return { file, videoUrl, handleFileUpload, analyzing, progress, progressText, startAnalysis, cancelAnalysis,
+    frames, rallies, setRallies, dataVersion, stats, processedRallies, metadata, jobId, setVideoDuration,
+    rangeStart, setRangeStart, rangeEnd, setRangeEnd, error,
+    handleExportJSON, handleImportJSON, importStatus, showStatus };
 }

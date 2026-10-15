@@ -30,7 +30,7 @@ export class RallyFSM {
   private readonly WARMUP_SKIP_SECONDS = 3.0;
 
   // Deterministic default for the serving side when analysis has no reliable side/winner signal.
-  private readonly DEFAULT_SERVER: 'A' | 'B' = 'A';
+  private readonly DEFAULT_SERVER = null;
   
   public processSignals(frames: FrameFeature[]): RallyClip[] {
     const rallies: RallyClip[] = [];
@@ -171,7 +171,11 @@ export class RallyFSM {
           start: parseFloat(this.currentRallyStart.toFixed(2)),
           end: parseFloat(endTime.toFixed(2)),
           hits: this.hitCount,
-          serverSide: this.DEFAULT_SERVER
+          serverSide: this.DEFAULT_SERVER,
+          source: 'legacy_audio',
+          reviewStatus: 'pending',
+          hitSource: 'audio_estimate',
+          reviewReasons: ['旧版音频候选，请人工复核']
         });
       }
     }
