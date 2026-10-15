@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "backend": ".venv/bin/python -m uvicorn backend.server:app --host 127.0.0.1 --port 8000",
+    "test:backend": ".venv/bin/python -m unittest discover -s backend/tests -v"
   },
   "dependencies": {
     "lucide-react": "^0.561.0",
