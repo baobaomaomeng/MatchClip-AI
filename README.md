@@ -22,7 +22,27 @@
 
 ## 本地运行
 
-需要 Node.js 20+、Python 3.12。以下命令适用于 macOS/Linux：
+需要先安装 Node.js 20+、Python 3.12，无需 DeepSeek 或其他大模型的 API Key。
+
+### 一键启动（推荐）
+
+macOS 在项目文件夹中双击 **`start.command`**；也可以在 macOS/Linux 的项目目录运行：
+
+```bash
+npm start
+```
+
+入口会在首次运行时创建 `.venv`、安装缺失的前后端依赖，随后同时启动前后端，等待本地 API 就绪并打开 `http://127.0.0.1:3000`。首次安装需要联网；姿态权重在首次分析时下载。保持启动终端打开，按 `Ctrl+C` 同时停止两个服务。端口 3000 或 8000 被占用时会报错，不会终止已有服务或切换到其他端口。
+
+在页面中选择本地视频 → 填写分析范围 →「开始视觉分析」→ 复核、调整候选片段 →「导出剪辑视频」→「下载剪辑成品」。一键启动不包含网上找比赛、下载视频或自动视觉复核。
+
+只检查环境、不安装依赖或启动服务：`npm start -- --check`。不自动打开浏览器：`npm start -- --no-open`。Mac 下载 ZIP 后若提示没有执行权限，先运行 `chmod +x start.command`。
+
+默认使用 CPU；可显式选择设备，例如 Apple Silicon 上运行 `MATCHCLIP_DEVICE=mps npm start`，兼容 CUDA 的机器运行 `MATCHCLIP_DEVICE=cuda npm start`。遇到设备兼容问题时使用默认 CPU。
+
+### 分开启动 / 手动安装
+
+以下命令适用于 macOS/Linux：
 
 ```bash
 npm install
