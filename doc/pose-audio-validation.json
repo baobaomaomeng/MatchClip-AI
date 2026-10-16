@@ -1,0 +1,103 @@
+{
+  "date": "2026-10-15",
+  "sourceUrl": "https://www.youtube.com/watch?v=X9QaTW9vHmo",
+  "sourceTitle": "BWF Denmark Open 2026 R32: Weng Hong Yang vs Christo Popov",
+  "sourceFile": "bwf-weng-popov-20261014.mp4",
+  "analysisRange": [
+    240,
+    900
+  ],
+  "method": "yolo11n-pose + spectral-onset + temporal-rules-v1",
+  "scoreboardUsed": false,
+  "automaticCandidates": 21,
+  "candidateSeconds": 238.4,
+  "manuallyRemoved": [
+    {
+      "start": 242.2,
+      "end": 249.6,
+      "reason": "warmup"
+    },
+    {
+      "start": 250.2,
+      "end": 252.4,
+      "reason": "picking up shuttle / walking"
+    }
+  ],
+  "remainingCandidates": 19,
+  "reviewedCandidates": 1,
+  "exportedSegments": [
+    {
+      "start": 275.6,
+      "end": 281.8
+    },
+    {
+      "start": 291.2,
+      "end": 297.8
+    },
+    {
+      "start": 308,
+      "end": 313
+    }
+  ],
+  "exportedVideo": {
+    "duration": 17.8,
+    "width": 1280,
+    "height": 720
+  },
+  "fullOutputDecode": "passed",
+  "scoreboardMaskCheck": {
+    "check": "Replace the entire top 22% with random pixels and compare real model features",
+    "source": "weng-popov-2026-10-14",
+    "range": [
+      276,
+      279.8
+    ],
+    "frames": 20,
+    "identical": true,
+    "twoPlayers": 20,
+    "limit": "This tests overlay independence only, not rally boundary accuracy."
+  },
+  "automatedTests": {
+    "frontend": 26,
+    "backend": 14,
+    "result": "passed",
+    "buildRun": false
+  },
+  "browserChecks": [
+    "real model job",
+    "unknown score",
+    "boundary edit",
+    "split",
+    "merge",
+    "overlap rejection",
+    "manual insertion",
+    "false-positive deletion",
+    "review filter",
+    "selected MP4 export",
+    "JSON save"
+  ],
+  "fullMatchRun": {
+    "analysisRange": [270, 4380],
+    "automaticCandidates": 118,
+    "candidateSeconds": 1196,
+    "outputDurationSeconds": 1196.02,
+    "outputSize": [1280, 720],
+    "outputFps": 30,
+    "outputVideoCodec": "h264",
+    "outputAudioCodec": "aac",
+    "elapsedSecondsIncludingExport": 554.2,
+    "device": "cpu",
+    "firstClipSource": [275.6, 281.8],
+    "lastClipSource": [4104.2, 4111],
+    "postMatchClips": 0,
+    "fullOutputDecode": "passed",
+    "reviewStatus": "pending",
+    "notes": "Opening warmup excluded by starting at 270 seconds. 118 candidates are not 118 verified points; no full-match precision/recall evaluation."
+  },
+  "limitations": [
+    "21 candidates are not 21 confirmed rallies. No precision/recall claim.",
+    "Most candidates are still pending review. No full-match annotation or evaluation.",
+    "Warmup, walking and same-view replays can survive segmentation.",
+    "The scoreboard mask test checks feature independence on 20 frames, not boundary accuracy."
+  ]
+}

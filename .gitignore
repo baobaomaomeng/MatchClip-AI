@@ -2,3 +2,8 @@ node_modules
 
 dist/
 package-lock.json
+.venv/
+.matchclip/
+__pycache__/
+*.pyc
+.pytest_cache/

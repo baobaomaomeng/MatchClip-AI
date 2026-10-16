@@ -1,105 +1,24 @@
-import { RallyClip, RallyClipWithState } from '../types';
-import { scoreEngine } from './scoreService';
-
-/**
- * Generates a shell script containing the FFmpeg command to process the video.
- * Supports exporting a subset of rallies while keeping original scores if provided.
- */
-export const generateFFmpegScript = (inputFilename: string, rallies: (RallyClip | RallyClipWithState)[]): string => {
-  const outputFilename = "highlights_scored.mp4";
-  
-  if (rallies.length === 0) {
-    return "# No rallies detected.";
-  }
-
-  // Determine if input is already processed with state, or needs processing
-  let ralliesWithState: RallyClipWithState[];
-  
-  // Check if the first element has scoreStateBefore (Type Guardish check)
-  if ('scoreStateBefore' in rallies[0]) {
-      // Use existing state (Preserves original match score context for highlights)
-      ralliesWithState = rallies as RallyClipWithState[];
-  } else {
-      // Process from scratch (Recalculates sequence 0-0, 1-0, etc.)
-      ralliesWithState = scoreEngine.processRallies(rallies as RallyClip[]);
-  }
-
-  // Build Filter Complex
-  let filterComplex = "";
-  let inputs = "";
-  
-  inputs = ` -i "${inputFilename}" `;
-
-  ralliesWithState.forEach((r, i) => {
-    // Get score entering the rally
-    const state = r.scoreStateBefore;
-    
-    // Video Filter: Trim -> SetPTS -> DrawText (Score) -> DrawText (Rally #) -> DrawText (Server/Court)
-    const vLabel = `v${i}`;
-    const aLabel = `a${i}`;
-    
-    // Text Formatting
-    // Scores: Near (A) vs Far (B)
-    const scoreText = `Near ${state.scoreA} - ${state.scoreB} Far`;
-
-    // Service Indicator
-    // "Serve: Near (R)" or "Serve: Far (L)"
-    // Using visualServiceCourt string like "Near Side (Right)"
-    // Shorten for video: "Sv: Near (Right)"
-    // CRITICAL FIX: Escape the colon after 'Sv' because it's a separator in FFmpeg filter syntax.
-    const serveText = `Sv\\: ${state.visualServiceCourt}`;
-
-    // Escape characters for FFmpeg
-    // We need to ensure that the colon inside the TEXT VALUE is escaped with a backslash
-    // so FFmpeg doesn't treat it as the end of the 'text' option.
-    // In JS string literal, '\\' becomes '\'.
-    // So `Score\\:` becomes `Score\:` in the string. FFmpeg reads `Score\:`. Correct.
-    
-    const escapedScore = `Score\\: ${scoreText}`;
-    // Include Hit Count in Rally Label
-    const escapedRally = `Rally \\#${r.id} (${r.hits} Hits)`;
-    const escapedServe = `${serveText}`;
-    
-    // DrawText Filters
-    // 1. Score (Top Right)
-    const drawScore = `drawtext=text='${escapedScore}':fontcolor=white:fontsize=48:x=w-tw-20:y=20:box=1:boxcolor=black@0.5:boxborderw=5`;
-    
-    // 2. Rally ID (Top Left)
-    const drawRally = `drawtext=text='${escapedRally}':fontcolor=0x10b981:fontsize=32:x=20:y=20:box=1:boxcolor=black@0.5:boxborderw=5`;
-
-    // 3. Service Side Hint (Bottom Right)
-    // Dynamic Color: Yellow for Near serving, Cyan for Far serving
-    const serveColor = state.server === 'A' ? 'yellow' : 'cyan';
-    const drawServe = `drawtext=text='${escapedServe}':fontcolor=${serveColor}:fontsize=32:x=w-tw-20:y=80:box=1:boxcolor=black@0.5:boxborderw=2`;
-
-    filterComplex += `[0:v]trim=start=${r.start}:end=${r.end},setpts=PTS-STARTPTS,${drawScore},${drawRally},${drawServe}[${vLabel}];`;
-    filterComplex += `[0:a]atrim=start=${r.start}:end=${r.end},asetpts=PTS-STARTPTS[${aLabel}];`;
-  });
-
-  // Concat Filter
-  ralliesWithState.forEach((_, i) => {
-    filterComplex += `[v${i}][a${i}]`;
-  });
-  filterComplex += `concat=n=${rallies.length}:v=1:a=1[outv][outa]`;
-
-  // Construct Final Command
-  const scriptContent = `#!/bin/bash
-# 羽毛球智能剪辑 - FFmpeg 处理脚本
-# 生成时间: ${new Date().toISOString()}
-# 包含片段数: ${rallies.length}
-# 规则引擎: 21分制 (Near/Far Player)
-
-echo "开始处理视频..."
-
-ffmpeg ${inputs} \\
--filter_complex "${filterComplex}" \\
--map "[outv]" -map "[outa]" \\
--c:v libx264 -preset fast -crf 22 \\
--c:a aac -b:a 128k \\
-"${outputFilename}"
-
-echo "处理完成！输出文件: ${outputFilename}"
+import {RallyClip} from '../types';
+const shellQuote=(value:string)=>"'"+value.replace(/'/g,"'\\''")+"'";
+/** Executable offline export, with precise re-encoding and no fabricated score overlay. */
+export function generateFFmpegScript(filename:string,rallies:RallyClip[]):string {
+  if(!rallies.length)throw new Error('没有可导出的片段');
+  const sorted=[...rallies].sort((a,b)=>a.start-b.start);
+  sorted.forEach((r,i)=>{if(!Number.isFinite(r.start)||!Number.isFinite(r.end)||r.start<0||r.end<=r.start||i>0&&r.start<sorted[i-1].end)throw new Error('片段时间无效或重叠');});
+  const commands=sorted.map((r,i)=>`ffmpeg -hide_banner -loglevel error -y -ss ${r.start} -i "$input" -t ${(r.end-r.start).toFixed(3)} -map 0:v:0 -map '0:a:0?' -c:v libx264 -preset veryfast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 128k "$work/${i}.mp4"`).join('\n');
+  const entries=sorted.map((_,i)=>`file '${i}.mp4'`).join('\n');
+  return `#!/usr/bin/env bash
+set -euo pipefail
+# 在原视频目录运行；也可把原视频绝对路径作为第一个参数传入。
+# 导出候选片段，不添加未经确认的比分或拍数。
+input=\${1:-${shellQuote(filename)}}
+output=\${2:-highlights.mp4}
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+${commands}
+cat > "$work/clips.txt" <<'MATCHCLIP_SEGMENTS'
+${entries}
+MATCHCLIP_SEGMENTS
+ffmpeg -hide_banner -loglevel error -n -f concat -safe 1 -i "$work/clips.txt" -c copy -movflags +faststart "$output"
 `;
-
-  return scriptContent;
-};
+}
